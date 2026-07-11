@@ -46,6 +46,15 @@ interface EmailContextType {
   moveToFolder: (emailId: string, folder: string) => Promise<void>;
   deleteEmail: (emailId: string) => Promise<void>;
 
+  // Bulk selection
+  selectedEmailIds: Set<string>;
+  toggleEmailSelection: (id: string) => void;
+  selectAllEmails: () => void;
+  clearEmailSelection: () => void;
+  bulkArchive: () => Promise<void>;
+  bulkDelete: () => Promise<void>;
+  bulkMarkRead: (read: boolean) => Promise<void>;
+
   // Unread counts
   unreadCounts: Record<string, number>;
 
@@ -81,6 +90,7 @@ export function EmailProvider({ children }: { children: ReactNode }) {
   const [emails, setEmails] = useState<Email[]>([]);
   const [emailsLoading, setEmailsLoading] = useState(false);
   const [selectedEmail, setSelectedEmailState] = useState<Email | null>(null);
+  const [selectedEmailIds, setSelectedEmailIds] = useState<Set<string>>(new Set());
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [labels, setLabels] = useState<EmailLabel[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -246,6 +256,58 @@ export function EmailProvider({ children }: { children: ReactNode }) {
     setComposeData(null);
   }, []);
 
+  const toggleEmailSelection = useCallback((id: string) => {
+    setSelectedEmailIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
+
+  const selectAllEmails = useCallback(() => {
+    setSelectedEmailIds(new Set(emails.map((e) => e.id)));
+  }, [emails]);
+
+  const clearEmailSelection = useCallback(() => {
+    setSelectedEmailIds(new Set());
+  }, []);
+
+  const bulkArchive = useCallback(async () => {
+    if (selectedEmailIds.size === 0) return;
+    const ids = Array.from(selectedEmailIds);
+    await supabase.from('emails').update({ folder: 'archive' }).in('id', ids);
+    setEmails((prev) => prev.filter((e) => !selectedEmailIds.has(e.id)));
+    if (selectedEmail && selectedEmailIds.has(selectedEmail.id)) setSelectedEmailState(null);
+    setSelectedEmailIds(new Set());
+    reloadUnreadCounts();
+  }, [selectedEmailIds, selectedEmail, reloadUnreadCounts]);
+
+  const bulkDelete = useCallback(async () => {
+    if (selectedEmailIds.size === 0) return;
+    const ids = Array.from(selectedEmailIds);
+    const toTrash = emails.filter((e) => selectedEmailIds.has(e.id) && e.folder !== 'trash');
+    const toPerm = emails.filter((e) => selectedEmailIds.has(e.id) && e.folder === 'trash');
+    if (toTrash.length > 0) {
+      await supabase.from('emails').update({ folder: 'trash' }).in('id', toTrash.map((e) => e.id));
+    }
+    if (toPerm.length > 0) {
+      await supabase.from('emails').delete().in('id', toPerm.map((e) => e.id));
+    }
+    setEmails((prev) => prev.filter((e) => !selectedEmailIds.has(e.id)));
+    if (selectedEmail && selectedEmailIds.has(selectedEmail.id)) setSelectedEmailState(null);
+    setSelectedEmailIds(new Set());
+    reloadUnreadCounts();
+  }, [selectedEmailIds, selectedEmail, emails, reloadUnreadCounts]);
+
+  const bulkMarkRead = useCallback(async (read: boolean) => {
+    if (selectedEmailIds.size === 0) return;
+    const ids = Array.from(selectedEmailIds);
+    await supabase.from('emails').update({ is_read: read }).in('id', ids);
+    setEmails((prev) => prev.map((e) => selectedEmailIds.has(e.id) ? { ...e, is_read: read } : e));
+    setSelectedEmailIds(new Set());
+    reloadUnreadCounts();
+  }, [selectedEmailIds, reloadUnreadCounts]);
+
   useEffect(() => {
     if (user) {
       reloadAccounts();
@@ -304,6 +366,13 @@ export function EmailProvider({ children }: { children: ReactNode }) {
         moveToFolder,
         deleteEmail,
         unreadCounts,
+        selectedEmailIds,
+        toggleEmailSelection,
+        selectAllEmails,
+        clearEmailSelection,
+        bulkArchive,
+        bulkDelete,
+        bulkMarkRead,
         labels,
         reloadLabels,
         searchQuery,
