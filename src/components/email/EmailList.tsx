@@ -1,4 +1,4 @@
-import { Search, RefreshCw, Loader2, InboxIcon } from 'lucide-react';
+import { Search, RefreshCw, Loader2, InboxIcon, Menu } from 'lucide-react';
 import { useEmail } from '../../contexts/EmailContext';
 import EmailListItem from './EmailListItem';
 
@@ -23,6 +23,7 @@ export default function EmailList() {
     selectedAccountId,
     accounts,
     unreadCounts,
+    setSidebarOpen,
   } = useEmail();
 
   const title = searchQuery ? `Search: "${searchQuery}"` : FOLDER_LABELS[currentFolder] ?? 'Inbox';
@@ -30,27 +31,37 @@ export default function EmailList() {
   const currentAccount = accounts.find((a) => a.id === selectedAccountId);
 
   return (
-    <div className="flex flex-col h-full bg-white border-r border-slate-200" style={{ width: 360 }}>
+    <div className="flex flex-col h-full bg-white border-r border-slate-200 w-full md:w-[360px] md:flex-none">
       {/* Header */}
       <div className="px-4 pt-4 pb-3 border-b border-slate-100">
         <div className="flex items-center justify-between mb-3">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900 flex items-center gap-2">
-              {title}
-              {unread != null && unread > 0 && (
-                <span className="text-xs font-bold px-1.5 py-0.5 rounded-full bg-blue-600 text-white">
-                  {unread > 99 ? '99+' : unread}
-                </span>
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Hamburger — mobile only */}
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-all md:hidden flex-shrink-0"
+              aria-label="Open menu"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-slate-900 flex items-center gap-2">
+                {title}
+                {unread != null && unread > 0 && (
+                  <span className="text-xs font-bold px-1.5 py-0.5 rounded-full bg-blue-600 text-white">
+                    {unread > 99 ? '99+' : unread}
+                  </span>
+                )}
+              </h2>
+              {currentAccount && (
+                <p className="text-xs text-slate-400 mt-0.5 truncate">{currentAccount.address}</p>
               )}
-            </h2>
-            {currentAccount && (
-              <p className="text-xs text-slate-400 mt-0.5 truncate">{currentAccount.address}</p>
-            )}
+            </div>
           </div>
           <button
             onClick={() => reloadEmails()}
             disabled={emailsLoading}
-            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-all disabled:opacity-50"
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-all disabled:opacity-50 flex-shrink-0"
           >
             <RefreshCw className={`w-4 h-4 ${emailsLoading ? 'animate-spin' : ''}`} />
           </button>
@@ -99,9 +110,7 @@ export default function EmailList() {
               {searchQuery ? 'No results found' : `${title} is empty`}
             </p>
             <p className="text-xs mt-1">
-              {searchQuery
-                ? 'Try different search terms'
-                : "You're all caught up!"}
+              {searchQuery ? 'Try different search terms' : "You're all caught up!"}
             </p>
           </div>
         ) : (

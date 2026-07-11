@@ -5,12 +5,12 @@ import {
   Trash2,
   Archive,
   Star,
-  MoreVertical,
   Paperclip,
   Download,
   ChevronDown,
   X,
   MailOpen,
+  ArrowLeft,
 } from 'lucide-react';
 import { useEmail } from '../../contexts/EmailContext';
 import { Email, EmailAddress } from '../../lib/types';
@@ -71,13 +71,15 @@ export default function EmailDetail() {
   return (
     <div className="flex-1 flex flex-col h-full bg-white overflow-hidden">
       {/* Toolbar */}
-      <div className="flex items-center gap-1 px-6 py-3 border-b border-slate-100">
+      <div className="flex items-center gap-1 px-4 md:px-6 py-3 border-b border-slate-100">
+        {/* Back button — mobile shows ArrowLeft to go back to list; desktop shows X to deselect */}
         <button
           onClick={() => setSelectedEmail(null)}
-          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-all mr-2"
+          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-all mr-1"
           title="Back"
         >
-          <X className="w-4 h-4" />
+          <ArrowLeft className="w-4 h-4 md:hidden" />
+          <X className="w-4 h-4 hidden md:block" />
         </button>
 
         <ActionButton icon={Archive} label="Archive" onClick={() => moveToFolder(selectedEmail.id, 'archive')} />
@@ -97,9 +99,9 @@ export default function EmailDetail() {
 
       {/* Email content */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-8 py-6">
+        <div className="max-w-3xl mx-auto px-4 md:px-8 py-6">
           {/* Subject */}
-          <h1 className="text-2xl font-semibold text-slate-900 mb-4 leading-tight">
+          <h1 className="text-xl md:text-2xl font-semibold text-slate-900 mb-4 leading-tight">
             {selectedEmail.subject || '(no subject)'}
           </h1>
 

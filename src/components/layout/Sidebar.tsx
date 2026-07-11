@@ -16,11 +16,15 @@ import {
   Mail,
   LogOut,
   ChevronRight,
+  Download,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
 import { useEmail } from '../../contexts/EmailContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { SidebarFolder, EmailAccount } from '../../lib/types';
 import { getInitials, getAvatarColor } from '../../lib/utils';
+import { usePWAInstall } from '../../hooks/usePWAInstall';
 
 const FOLDERS: { id: SidebarFolder; label: string; icon: typeof Inbox }[] = [
   { id: 'inbox', label: 'Inbox', icon: Inbox },
@@ -47,10 +51,13 @@ export default function Sidebar() {
     openCompose,
     setActiveView,
     activeView,
+    setSidebarOpen,
   } = useEmail();
 
+  const { canInstall, install, installed } = usePWAInstall();
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [labelsExpanded, setLabelsExpanded] = useState(true);
+  const [installDismissed, setInstallDismissed] = useState(false);
 
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
 
@@ -59,6 +66,12 @@ export default function Sidebar() {
     setSelectedEmail(null);
     setSearchQuery('');
     setActiveView('mail');
+    setSidebarOpen(false);
+  };
+
+  const handleViewChange = (view: 'contacts' | 'settings') => {
+    setActiveView(view);
+    setSidebarOpen(false);
   };
 
   return (
@@ -69,12 +82,22 @@ export default function Sidebar() {
           <Mail className="w-5 h-5 text-white" />
         </div>
         <span className="text-lg font-bold text-slate-800 tracking-tight">MailFlow</span>
+        {/* Close button on mobile */}
+        <button
+          className="ml-auto p-1 rounded-lg hover:bg-slate-200 text-slate-500 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        >
+          <X className="w-4 h-4" />
+        </button>
       </div>
 
       {/* Compose button */}
       <div className="px-4 py-3">
         <button
-          onClick={() => openCompose(selectedAccountId ? { fromAccountId: selectedAccountId } : {})}
+          onClick={() => {
+            openCompose(selectedAccountId ? { fromAccountId: selectedAccountId } : {});
+            setSidebarOpen(false);
+          }}
           className="flex items-center gap-2.5 px-4 py-2.5 rounded-2xl bg-white shadow-sm border border-slate-200 hover:shadow-md transition-all text-slate-700 font-medium text-sm w-full group"
         >
           <PenSquare className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform" />
@@ -149,10 +172,39 @@ export default function Sidebar() {
         )}
       </nav>
 
+      {/* PWA Install banner */}
+      {canInstall && !installDismissed && (
+        <div className="mx-2 mb-2 rounded-xl bg-blue-50 border border-blue-100 p-3">
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <p className="text-xs font-semibold text-blue-800">Install MailFlow</p>
+            <button
+              onClick={() => setInstallDismissed(true)}
+              className="text-blue-400 hover:text-blue-600 flex-shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <p className="text-xs text-blue-600 mb-2.5">Add to your home screen for quick access.</p>
+          <button
+            onClick={install}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Install App
+          </button>
+        </div>
+      )}
+      {installed && (
+        <div className="mx-2 mb-2 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 text-green-700 text-xs">
+          <CheckCircle2 className="w-3.5 h-3.5" />
+          App installed
+        </div>
+      )}
+
       {/* Bottom actions */}
       <div className="border-t border-slate-200 p-2 space-y-0.5">
         <button
-          onClick={() => setActiveView('contacts')}
+          onClick={() => handleViewChange('contacts')}
           className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-xl text-sm transition-all ${
             activeView === 'contacts'
               ? 'bg-blue-100 text-blue-700 font-semibold'
@@ -163,7 +215,7 @@ export default function Sidebar() {
           Contacts
         </button>
         <button
-          onClick={() => setActiveView('settings')}
+          onClick={() => handleViewChange('settings')}
           className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-xl text-sm transition-all ${
             activeView === 'settings'
               ? 'bg-blue-100 text-blue-700 font-semibold'
@@ -179,7 +231,7 @@ export default function Sidebar() {
       <div className="border-t border-slate-200 p-2">
         {accounts.length === 0 ? (
           <button
-            onClick={() => setActiveView('settings')}
+            onClick={() => handleViewChange('settings')}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-blue-600 hover:bg-blue-50 transition-colors"
           >
             <Plus className="w-4 h-4" />
@@ -228,7 +280,7 @@ export default function Sidebar() {
                 ))}
                 <div className="border-t border-slate-100">
                   <button
-                    onClick={() => { setActiveView('settings'); setAccountMenuOpen(false); }}
+                    onClick={() => { handleViewChange('settings'); setAccountMenuOpen(false); }}
                     className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50 transition-colors"
                   >
                     <Plus className="w-3.5 h-3.5" />

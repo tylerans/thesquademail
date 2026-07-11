@@ -31,6 +31,10 @@ interface EmailContextType {
   activeView: ActiveView;
   setActiveView: (view: ActiveView) => void;
 
+  // Mobile sidebar
+  sidebarOpen: boolean;
+  setSidebarOpen: (open: boolean) => void;
+
   // Emails
   emails: Email[];
   emailsLoading: boolean;
@@ -73,6 +77,7 @@ export function EmailProvider({ children }: { children: ReactNode }) {
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [currentFolder, setCurrentFolder] = useState<SidebarFolder>('inbox');
   const [activeView, setActiveView] = useState<ActiveView>('mail');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [emails, setEmails] = useState<Email[]>([]);
   const [emailsLoading, setEmailsLoading] = useState(false);
   const [selectedEmail, setSelectedEmailState] = useState<Email | null>(null);
@@ -287,6 +292,8 @@ export function EmailProvider({ children }: { children: ReactNode }) {
         setCurrentFolder,
         activeView,
         setActiveView,
+        sidebarOpen,
+        setSidebarOpen,
         emails,
         emailsLoading,
         selectedEmail,

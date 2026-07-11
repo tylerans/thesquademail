@@ -6,21 +6,28 @@ import {
   Send,
   Paperclip,
   Trash2,
-  ChevronDown,
   Loader2,
   FileText,
+  HardDrive,
 } from 'lucide-react';
 import { useEmail } from '../../contexts/EmailContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { EmailAddress } from '../../lib/types';
 import { formatFileSize, generateMessageId } from '../../lib/utils';
 import { supabase } from '../../lib/supabase';
+import { openDrivePicker, isDriveConfigured, DriveFile } from '../../lib/googleDrive';
 
 interface AttachmentFile {
   file: File;
   id: string;
   uploading: boolean;
   storagePath?: string;
+}
+
+interface DriveLink {
+  id: string;
+  name: string;
+  url: string;
 }
 
 export default function ComposeModal() {
@@ -42,6 +49,8 @@ export default function ComposeModal() {
   const [subject, setSubject] = useState(composeData?.subject || '');
   const [body, setBody] = useState(composeData?.body || '');
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
+  const [driveLinks, setDriveLinks] = useState<DriveLink[]>([]);
+  const [drivePickerLoading, setDrivePickerLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draftId, setDraftId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -195,9 +204,42 @@ export default function ComposeModal() {
     closeCompose();
   };
 
+  const handleDrivePicker = async () => {
+    setDrivePickerLoading(true);
+    setError(null);
+    try {
+      const files = await openDrivePicker();
+      if (files.length > 0) {
+        const links: DriveLink[] = files.map((f: DriveFile) => ({
+          id: f.id,
+          name: f.name,
+          url: f.url,
+        }));
+        setDriveLinks((prev) => [...prev, ...links]);
+        // Append Drive links to body
+        const linkText = files
+          .map((f: DriveFile) => `\n[Google Drive] ${f.name}: ${f.url}`)
+          .join('');
+        setBody((prev) => prev + linkText);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to open Google Drive picker');
+    } finally {
+      setDrivePickerLoading(false);
+    }
+  };
+
+  const removeDriveLink = (id: string) => {
+    const link = driveLinks.find((l) => l.id === id);
+    if (link) {
+      setBody((prev) => prev.replace(`\n[Google Drive] ${link.name}: ${link.url}`, ''));
+    }
+    setDriveLinks((prev) => prev.filter((l) => l.id !== id));
+  };
+
   const modalClass = maximized
     ? 'fixed inset-4 z-50'
-    : 'fixed bottom-0 right-6 z-50 w-[540px]';
+    : 'fixed inset-0 z-50 md:inset-auto md:bottom-0 md:right-6 md:w-[540px]';
 
   if (minimized) {
     return (
@@ -217,8 +259,8 @@ export default function ComposeModal() {
   }
 
   return (
-    <div className={`${modalClass} flex flex-col bg-white rounded-t-xl shadow-2xl border border-slate-200`}
-      style={maximized ? {} : { maxHeight: '80vh' }}>
+    <div className={`${modalClass} flex flex-col bg-white md:rounded-t-xl shadow-2xl border border-slate-200`}
+      style={maximized ? {} : { maxHeight: '100dvh' }}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 bg-slate-800 text-white rounded-t-xl flex-shrink-0">
         <span className="text-sm font-medium">
@@ -336,6 +378,34 @@ export default function ComposeModal() {
           </div>
         )}
 
+        {/* Drive links */}
+        {driveLinks.length > 0 && (
+          <div className="px-4 py-2 border-t border-slate-100 flex flex-wrap gap-2">
+            {driveLinks.map((link) => (
+              <div
+                key={link.id}
+                className="flex items-center gap-1.5 px-2 py-1 bg-green-50 border border-green-200 rounded-lg text-xs"
+              >
+                <HardDrive className="w-3 h-3 text-green-600" />
+                <a
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-green-700 max-w-[140px] truncate hover:underline"
+                >
+                  {link.name}
+                </a>
+                <button
+                  onClick={() => removeDriveLink(link.id)}
+                  className="text-green-500 hover:text-green-700 ml-0.5"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {error && (
           <div className="mx-4 mb-2 px-3 py-2 bg-red-50 rounded-lg text-xs text-red-600 border border-red-100">
             {error}
@@ -367,6 +437,21 @@ export default function ComposeModal() {
           >
             <Paperclip className="w-4 h-4" />
           </button>
+
+          {isDriveConfigured() && (
+            <button
+              onClick={handleDrivePicker}
+              disabled={drivePickerLoading}
+              className="p-2 rounded-lg hover:bg-green-50 text-slate-500 hover:text-green-600 transition-all disabled:opacity-50"
+              title="Attach from Google Drive"
+            >
+              {drivePickerLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <HardDrive className="w-4 h-4" />
+              )}
+            </button>
+          )}
 
           <div className="flex-1" />
 
