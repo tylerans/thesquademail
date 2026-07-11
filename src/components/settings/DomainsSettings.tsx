@@ -12,21 +12,34 @@ import {
   Loader2,
   RefreshCw,
   Trash2,
+  AlertCircle,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useEmail } from '../../contexts/EmailContext';
 import { Domain, EmailAccount } from '../../lib/types';
 
+interface DnsRecord {
+  record: string;
+  type: string;
+  host: string;
+  value: string;
+  priority: number | null;
+  valid: boolean;
+}
+
+interface DomainWithRecords extends Domain {
+  dns_records: DnsRecord[];
+  resend_domain_id?: string;
+}
+
 export default function DomainsSettings() {
   const { accounts, reloadAccounts } = useEmail();
-  const [domains, setDomains] = useState<Domain[]>([]);
+  const [domains, setDomains] = useState<DomainWithRecords[]>([]);
   const [loading, setLoading] = useState(true);
   const [addingDomain, setAddingDomain] = useState(false);
   const [newDomainName, setNewDomainName] = useState('');
   const [domainError, setDomainError] = useState<string | null>(null);
   const [expandedDomain, setExpandedDomain] = useState<string | null>(null);
-  const [dnsRecords, setDnsRecords] = useState<Record<string, any[]>>({});
-  const [resendDomainIds, setResendDomainIds] = useState<Record<string, string>>({});
   const [verifying, setVerifying] = useState<string | null>(null);
   const [copiedCell, setCopiedCell] = useState<string | null>(null);
   const [addingAccount, setAddingAccount] = useState<string | null>(null);
@@ -44,7 +57,7 @@ export default function DomainsSettings() {
       .from('domains')
       .select('*')
       .order('created_at');
-    if (data) setDomains(data as Domain[]);
+    if (data) setDomains(data as DomainWithRecords[]);
     setLoading(false);
   };
 
@@ -59,25 +72,29 @@ export default function DomainsSettings() {
     setAddingDomain(true);
 
     try {
+      const session = (await supabase.auth.getSession()).data.session;
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-dns-records`,
         {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
+            Authorization: `Bearer ${session?.access_token}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ domain_name: name }),
         }
       );
       const result = await res.json();
-      if (!res.ok) throw new Error(result.error || 'Failed to add domain');
+      if (!res.ok) {
+        if (result.setup_required) {
+          setDomainError('RESEND_API_KEY is not configured. Add your free Resend API key in Supabase Edge Function secrets to enable custom domain email.');
+        } else {
+          throw new Error(result.error || 'Failed to add domain');
+        }
+        return;
+      }
 
       await loadDomains();
-      setDnsRecords((prev) => ({ ...prev, [result.domain_id]: result.records }));
-      if (result.resend_domain_id) {
-        setResendDomainIds((prev) => ({ ...prev, [result.domain_id]: result.resend_domain_id }));
-      }
       setExpandedDomain(result.domain_id);
       setNewDomainName('');
     } catch (err: any) {
@@ -87,30 +104,38 @@ export default function DomainsSettings() {
     }
   };
 
-  const handleVerify = async (domain: Domain) => {
+  const handleVerify = async (domain: DomainWithRecords) => {
     setVerifying(domain.id);
     try {
+      const session = (await supabase.auth.getSession()).data.session;
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-domain`,
         {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
+            Authorization: `Bearer ${session?.access_token}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
             domain_id: domain.id,
-            resend_domain_id: resendDomainIds[domain.id] || domain.mailgun_domain,
+            resend_domain_id: domain.resend_domain_id || domain.mailgun_domain,
             domain_name: domain.domain_name,
           }),
         }
       );
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || 'Verification failed');
-      setDnsRecords((prev) => ({ ...prev, [domain.id]: result.records }));
-      await loadDomains();
+
+      // Update local state immediately with fresh records and status
+      setDomains((prev) =>
+        prev.map((d) =>
+          d.id === domain.id
+            ? { ...d, status: result.status, dns_records: result.records }
+            : d
+        )
+      );
     } catch (err: any) {
-      console.error(err);
+      setDomainError(`Verification failed: ${err.message}`);
     } finally {
       setVerifying(null);
     }
@@ -123,12 +148,12 @@ export default function DomainsSettings() {
     await reloadAccounts();
   };
 
-  const handleCreateAccount = async (domain: Domain) => {
-    const address = `${newAccountLocal.trim().toLowerCase()}@${domain.domain_name}`;
+  const handleCreateAccount = async (domain: DomainWithRecords) => {
     if (!newAccountLocal.trim()) {
       setAccountError('Enter a mailbox name');
       return;
     }
+    const address = `${newAccountLocal.trim().toLowerCase()}@${domain.domain_name}`;
     setAccountError(null);
     try {
       const { error } = await supabase.from('email_accounts').insert({
@@ -201,10 +226,12 @@ export default function DomainsSettings() {
           Add Domain
         </button>
       </div>
+
       {domainError && (
-        <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-lg border border-red-100 dark:border-red-800">
-          {domainError}
-        </p>
+        <div className="flex items-start gap-2 px-3 py-2 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-100 dark:border-red-800">
+          <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-red-600 dark:text-red-400">{domainError}</p>
+        </div>
       )}
 
       {/* Domain list */}
@@ -223,7 +250,6 @@ export default function DomainsSettings() {
               key={domain.id}
               domain={domain}
               accounts={domainAccounts(domain.id)}
-              records={dnsRecords[domain.id]}
               expanded={expandedDomain === domain.id}
               verifying={verifying === domain.id}
               copiedCell={copiedCell}
@@ -257,13 +283,11 @@ export default function DomainsSettings() {
       <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-800 text-sm">
         <p className="font-semibold text-blue-800 dark:text-blue-300 mb-2">How to set up custom domain email</p>
         <ol className="space-y-1 text-blue-700 dark:text-blue-400 text-xs list-decimal list-inside">
-          <li>Create a <strong>free</strong> account at <a href="https://resend.com" target="_blank" rel="noopener noreferrer" className="underline font-medium">resend.com</a> (3,000 emails/month free, no credit card)</li>
-          <li>Copy your API key from the Resend dashboard</li>
-          <li>Add it as a secret named <code className="bg-blue-100 dark:bg-blue-900/40 px-1 rounded font-mono">RESEND_API_KEY</code> in Supabase Edge Function settings</li>
-          <li>Add your domain above — DNS records are generated automatically</li>
-          <li>Add all DNS records at your domain registrar (SPF, DKIM, and the inbound MX record)</li>
-          <li>Click "Verify DNS" once propagated (can take up to 48 hours)</li>
-          <li>Create a mailbox on your verified domain and start sending and receiving</li>
+          <li>Create a <strong>free</strong> account at <a href="https://resend.com" target="_blank" rel="noopener noreferrer" className="underline font-medium">resend.com</a> (3,000 emails/month free)</li>
+          <li>Copy your API key from the Resend dashboard and add it as <code className="bg-blue-100 dark:bg-blue-900/40 px-1 rounded font-mono">RESEND_API_KEY</code> in Supabase Edge Function secrets</li>
+          <li>Add your domain above — SPF, DKIM, and MX records are generated automatically</li>
+          <li>Add all DNS records at your domain registrar and click "Verify DNS" (propagation can take up to 48 hours)</li>
+          <li>Once verified, create a mailbox and start sending and receiving</li>
         </ol>
       </div>
     </div>
@@ -273,7 +297,6 @@ export default function DomainsSettings() {
 function DomainCard({
   domain,
   accounts,
-  records,
   expanded,
   verifying,
   copiedCell,
@@ -292,9 +315,8 @@ function DomainCard({
   onNewAccountLocalChange,
   onNewAccountNameChange,
 }: {
-  domain: Domain;
+  domain: DomainWithRecords;
   accounts: EmailAccount[];
-  records?: any[];
   expanded: boolean;
   verifying: boolean;
   copiedCell: string | null;
@@ -313,18 +335,18 @@ function DomainCard({
   onNewAccountLocalChange: (v: string) => void;
   onNewAccountNameChange: (v: string) => void;
 }) {
+  const records: DnsRecord[] = domain.dns_records || [];
+
   const StatusIcon =
-    domain.status === 'verified'
-      ? CheckCircle2
-      : domain.status === 'failed'
-      ? XCircle
-      : Clock;
+    domain.status === 'verified' ? CheckCircle2
+    : domain.status === 'failed' ? XCircle
+    : Clock;
+
   const statusColor =
-    domain.status === 'verified'
-      ? 'text-green-600 dark:text-green-400'
-      : domain.status === 'failed'
-      ? 'text-red-500 dark:text-red-400'
-      : 'text-yellow-500 dark:text-yellow-400';
+    domain.status === 'verified' ? 'text-green-600 dark:text-green-400'
+    : domain.status === 'failed' ? 'text-red-500 dark:text-red-400'
+    : 'text-yellow-500 dark:text-yellow-400';
+
   const statusBg =
     domain.status === 'verified'
       ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
@@ -337,16 +359,12 @@ function DomainCard({
       {/* Domain header */}
       <div className="flex items-center gap-3 px-4 py-3 bg-slate-50 dark:bg-gray-700/50 hover:bg-slate-100 dark:hover:bg-gray-700 transition-colors">
         <button onClick={onToggleExpand} className="flex-1 flex items-center gap-3 min-w-0 text-left">
-          {expanded ? (
-            <ChevronDown className="w-4 h-4 text-slate-400 dark:text-gray-500 flex-shrink-0" />
-          ) : (
-            <ChevronRight className="w-4 h-4 text-slate-400 dark:text-gray-500 flex-shrink-0" />
-          )}
+          {expanded
+            ? <ChevronDown className="w-4 h-4 text-slate-400 dark:text-gray-500 flex-shrink-0" />
+            : <ChevronRight className="w-4 h-4 text-slate-400 dark:text-gray-500 flex-shrink-0" />}
           <Globe className="w-4 h-4 text-slate-500 dark:text-gray-400 flex-shrink-0" />
           <span className="text-sm font-semibold text-slate-900 dark:text-gray-100">{domain.domain_name}</span>
-          <span
-            className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${statusBg} ${statusColor}`}
-          >
+          <span className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${statusBg} ${statusColor}`}>
             <StatusIcon className="w-3 h-3" />
             {domain.status === 'verified' ? 'Verified' : domain.status === 'failed' ? 'Failed' : 'Pending DNS'}
           </span>
@@ -358,13 +376,10 @@ function DomainCard({
           <button
             onClick={onVerify}
             disabled={verifying}
+            title="Re-check DNS records with Resend"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-gray-700 border border-slate-200 dark:border-gray-600 text-slate-600 dark:text-gray-300 hover:border-blue-300 hover:text-blue-600 dark:hover:border-blue-500 dark:hover:text-blue-400 transition-all disabled:opacity-50"
           >
-            {verifying ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="w-3.5 h-3.5" />
-            )}
+            {verifying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             Verify DNS
           </button>
           <button
@@ -380,19 +395,27 @@ function DomainCard({
       {expanded && (
         <div className="px-4 py-4 space-y-5 border-t border-slate-100 dark:border-gray-700">
           {/* DNS Records */}
-          {records && records.length > 0 ? (
+          {records.length > 0 ? (
             <div>
-              <p className="text-xs font-semibold text-slate-600 dark:text-gray-400 uppercase tracking-wider mb-2">
-                DNS Records to Add
-              </p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-slate-600 dark:text-gray-400 uppercase tracking-wider">
+                  DNS Records to Add
+                </p>
+                {domain.status !== 'verified' && (
+                  <p className="text-xs text-slate-400 dark:text-gray-500">
+                    Add all records, then click "Verify DNS"
+                  </p>
+                )}
+              </div>
               <div className="rounded-lg border border-slate-200 dark:border-gray-700 overflow-hidden text-xs">
                 <table className="w-full">
                   <thead className="bg-slate-50 dark:bg-gray-700/50">
                     <tr>
                       <th className="text-left px-3 py-2 text-slate-500 dark:text-gray-400 font-medium w-16">Type</th>
-                      <th className="text-left px-3 py-2 text-slate-500 dark:text-gray-400 font-medium w-1/3">Host</th>
+                      <th className="text-left px-3 py-2 text-slate-500 dark:text-gray-400 font-medium w-20">Record</th>
+                      <th className="text-left px-3 py-2 text-slate-500 dark:text-gray-400 font-medium w-1/4">Host</th>
                       <th className="text-left px-3 py-2 text-slate-500 dark:text-gray-400 font-medium">Value</th>
-                      <th className="px-3 py-2 text-slate-500 dark:text-gray-400 font-medium w-16 text-center">Status</th>
+                      <th className="px-3 py-2 text-slate-500 dark:text-gray-400 font-medium w-14 text-center">OK?</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-700">
@@ -404,29 +427,38 @@ function DomainCard({
                             <span className="font-mono font-bold text-slate-700 dark:text-gray-300">{rec.type}</span>
                           </td>
                           <td className="px-3 py-2">
-                            <span className="font-mono text-slate-700 dark:text-gray-300 break-all">{rec.host}</span>
+                            <span className="text-slate-500 dark:text-gray-400">{rec.record}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-1">
+                              <span className="font-mono text-slate-700 dark:text-gray-300 break-all">{rec.host || '@'}</span>
+                              {rec.host && (
+                                <button
+                                  onClick={() => onCopy(rec.host, `host-${copyKey}`)}
+                                  className="p-0.5 hover:bg-slate-200 dark:hover:bg-gray-600 rounded text-slate-400 hover:text-slate-600 dark:hover:text-gray-300 flex-shrink-0 transition-all"
+                                >
+                                  {copiedCell === `host-${copyKey}` ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+                                </button>
+                              )}
+                            </div>
                           </td>
                           <td className="px-3 py-2">
                             <div className="flex items-start gap-1">
-                              <span className="font-mono text-slate-700 dark:text-gray-300 break-all flex-1">{rec.value}</span>
+                              <span className="font-mono text-slate-700 dark:text-gray-300 break-all flex-1">
+                                {rec.priority != null ? `${rec.priority} ${rec.value}` : rec.value}
+                              </span>
                               <button
-                                onClick={() => onCopy(rec.value, copyKey)}
+                                onClick={() => onCopy(rec.priority != null ? `${rec.priority} ${rec.value}` : rec.value, copyKey)}
                                 className="p-1 hover:bg-slate-200 dark:hover:bg-gray-600 rounded text-slate-400 dark:text-gray-500 hover:text-slate-600 dark:hover:text-gray-300 flex-shrink-0 transition-all"
                               >
-                                {copiedCell === copyKey ? (
-                                  <Check className="w-3 h-3 text-green-500" />
-                                ) : (
-                                  <Copy className="w-3 h-3" />
-                                )}
+                                {copiedCell === copyKey ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
                               </button>
                             </div>
                           </td>
                           <td className="px-3 py-2 text-center">
-                            {rec.valid ? (
-                              <CheckCircle2 className="w-3.5 h-3.5 text-green-500 mx-auto" />
-                            ) : (
-                              <Clock className="w-3.5 h-3.5 text-yellow-500 mx-auto" />
-                            )}
+                            {rec.valid
+                              ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500 mx-auto" />
+                              : <Clock className="w-3.5 h-3.5 text-yellow-400 mx-auto" />}
                           </td>
                         </tr>
                       );
@@ -435,12 +467,13 @@ function DomainCard({
                 </table>
               </div>
               <p className="text-xs text-slate-400 dark:text-gray-500 mt-1.5">
-                After adding these records, DNS propagation can take up to 48 hours.
+                DNS propagation can take up to 48 hours. Click "Verify DNS" to recheck.
               </p>
             </div>
           ) : (
-            <div className="text-xs text-slate-500 dark:text-gray-400 bg-slate-50 dark:bg-gray-700/30 rounded-lg px-4 py-3">
-              Click "Verify DNS" to load the DNS records for this domain, or re-add the domain if records are missing.
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-gray-400 bg-slate-50 dark:bg-gray-700/30 rounded-lg px-4 py-3">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+              Loading DNS records... Click "Verify DNS" if they don't appear.
             </div>
           )}
 
@@ -461,7 +494,11 @@ function DomainCard({
             </div>
 
             {accounts.length === 0 && !addingAccount && (
-              <p className="text-xs text-slate-400 dark:text-gray-500 italic">No mailboxes yet.</p>
+              <p className="text-xs text-slate-400 dark:text-gray-500 italic">
+                {domain.status !== 'verified'
+                  ? 'Verify the domain first, then add mailboxes.'
+                  : 'No mailboxes yet.'}
+              </p>
             )}
 
             <div className="space-y-1.5">
@@ -491,6 +528,7 @@ function DomainCard({
                       value={newAccountLocal}
                       onChange={(e) => onNewAccountLocalChange(e.target.value.toLowerCase().replace(/[^a-z0-9._+-]/g, ''))}
                       placeholder="hello"
+                      autoFocus
                       className="flex-1 px-2.5 py-1.5 rounded border border-slate-200 dark:border-gray-600 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
                     />
                     <span className="text-sm text-slate-600 dark:text-gray-400 font-medium">@{domain.domain_name}</span>

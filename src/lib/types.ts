@@ -4,6 +4,8 @@ export interface Domain {
   domain_name: string;
   status: 'pending' | 'verified' | 'failed';
   mailgun_domain?: string;
+  resend_domain_id?: string;
+  dns_records?: DnsRecord[];
   mx_record?: string;
   spf_record?: string;
   dkim_public_key?: string;
@@ -99,9 +101,10 @@ export interface ComposeData {
 export type ActiveView = 'mail' | 'contacts' | 'settings';
 
 export interface DnsRecord {
+  record: string;
   type: string;
   host: string;
   value: string;
-  priority?: number;
-  valid?: boolean;
+  priority: number | null;
+  valid: boolean;
 }

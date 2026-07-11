@@ -9,6 +9,36 @@ const corsHeaders = {
 
 const RESEND_API = "https://api.resend.com";
 
+async function verifyWebhookSignature(req: Request, body: string): Promise<boolean> {
+  const webhookSecret = Deno.env.get("RESEND_WEBHOOK_SECRET");
+  if (!webhookSecret) return true; // skip verification if secret not configured
+
+  const svixId = req.headers.get("svix-id");
+  const svixTimestamp = req.headers.get("svix-timestamp");
+  const svixSignature = req.headers.get("svix-signature");
+
+  if (!svixId || !svixTimestamp || !svixSignature) return false;
+
+  // Verify timestamp is within 5 minutes to prevent replay attacks
+  const ts = parseInt(svixTimestamp, 10);
+  if (Math.abs(Date.now() / 1000 - ts) > 300) return false;
+
+  const toSign = `${svixId}.${svixTimestamp}.${body}`;
+  const secretBytes = Uint8Array.from(atob(webhookSecret.replace("whsec_", "")), (c) => c.charCodeAt(0));
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    secretBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(toSign));
+  const computed = "v1," + btoa(String.fromCharCode(...new Uint8Array(sig)));
+
+  return svixSignature.split(" ").some((s) => s === computed);
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
@@ -22,10 +52,19 @@ Deno.serve(async (req: Request) => {
 
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
 
-    // Parse the Resend webhook payload (JSON)
-    const event = await req.json();
+    const body = await req.text();
 
-    // Only process email.received events
+    const signatureValid = await verifyWebhookSignature(req, body);
+    if (!signatureValid) {
+      console.warn("Invalid webhook signature");
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const event = JSON.parse(body);
+
     if (event.type !== "email.received") {
       return new Response(JSON.stringify({ ok: true, note: "ignored_event_type" }), {
         status: 200,
@@ -55,7 +94,7 @@ Deno.serve(async (req: Request) => {
     const fromName = fromMatch ? fromMatch[1].replace(/['"]/g, "").trim() : "";
     const fromAddress = fromMatch ? fromMatch[2].trim() : fromRaw.trim();
 
-    // Fetch full email content from Resend (body not included in webhook)
+    // Fetch full email content from Resend (body is not in the webhook payload)
     let bodyHtml = "";
     let bodyText = "";
     let inReplyTo: string | null = null;
@@ -68,20 +107,19 @@ Deno.serve(async (req: Request) => {
         const contentData = await contentRes.json();
         bodyHtml = contentData.html || "";
         bodyText = contentData.text || "";
-        // Extract In-Reply-To header
         const headers: { name: string; value: string }[] = contentData.headers || [];
         const replyToHeader = headers.find((h) => h.name.toLowerCase() === "in-reply-to");
         if (replyToHeader) inReplyTo = replyToHeader.value;
       }
     }
 
-    // Find which email accounts the recipients match
     const parseAddressList = (list: string[]) =>
       list.map((s) => {
         const m = s.match(/^(.*?)\s*<(.+?)>\s*$/);
         return m ? { name: m[1].replace(/['"]/g, "").trim(), email: m[2].trim() } : { email: s.trim() };
       });
 
+    // Match recipients to registered email accounts
     const allRecipients = [...toList, ...ccList];
     const matchedAccounts: Array<{ id: string; user_id: string }> = [];
 
@@ -131,7 +169,6 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
-      // Download and store attachments
       if (emailRow && resendApiKey && attachmentsMeta.length > 0) {
         for (const att of attachmentsMeta) {
           try {
@@ -166,7 +203,6 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Auto-save sender to contacts
       if (fromAddress) {
         await supabase
           .from("contacts")

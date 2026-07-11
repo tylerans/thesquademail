@@ -9,6 +9,17 @@ const corsHeaders = {
 
 const RESEND_API = "https://api.resend.com";
 
+function formatRecords(records: any[]): any[] {
+  return records.map((r: any) => ({
+    record: r.record,
+    type: r.type,
+    host: r.name,
+    value: r.value,
+    priority: r.priority ?? null,
+    valid: r.status === "verified",
+  }));
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
@@ -63,7 +74,7 @@ Deno.serve(async (req: Request) => {
 
     const webhookUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/receive-email`;
 
-    // Check if domain already exists in Resend by listing domains
+    // Check if domain already exists in Resend
     let resendDomainId: string | null = null;
     let domainRecords: any[] = [];
 
@@ -73,11 +84,21 @@ Deno.serve(async (req: Request) => {
     if (listRes.ok) {
       const listData = await listRes.json();
       const existing = (listData.data || []).find((d: any) => d.name === domain_name);
-      if (existing) resendDomainId = existing.id;
+      if (existing) {
+        resendDomainId = existing.id;
+        // Fetch full domain details to get current records and status
+        const detailRes = await fetch(`${RESEND_API}/domains/${resendDomainId}`, {
+          headers: { Authorization: `Bearer ${resendApiKey}` },
+        });
+        if (detailRes.ok) {
+          const detailData = await detailRes.json();
+          domainRecords = detailData.records || [];
+        }
+      }
     }
 
     if (!resendDomainId) {
-      // Create domain for sending
+      // Create domain in Resend (inbound receiving is determined by adding their MX record)
       const createRes = await fetch(`${RESEND_API}/domains`, {
         method: "POST",
         headers: {
@@ -97,28 +118,7 @@ Deno.serve(async (req: Request) => {
       domainRecords = createData.records || [];
     }
 
-    // Enable receiving capability on the domain
-    await fetch(`${RESEND_API}/domains/${resendDomainId}`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${resendApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        capabilities: { receiving: "enabled" },
-      }),
-    });
-
-    // Fetch domain details to get all records including inbound MX
-    const domainRes = await fetch(`${RESEND_API}/domains/${resendDomainId}`, {
-      headers: { Authorization: `Bearer ${resendApiKey}` },
-    });
-    if (domainRes.ok) {
-      const domainData = await domainRes.json();
-      domainRecords = domainData.records || [];
-    }
-
-    // Ensure a webhook exists for email.received events
+    // Ensure the inbound webhook is registered
     try {
       const webhooksRes = await fetch(`${RESEND_API}/webhooks`, {
         headers: { Authorization: `Bearer ${resendApiKey}` },
@@ -149,17 +149,9 @@ Deno.serve(async (req: Request) => {
       console.warn("Webhook setup warning:", whErr);
     }
 
-    // Format records for the UI
-    const formattedRecords = domainRecords.map((r: any) => ({
-      record: r.record,
-      type: r.type,
-      host: r.name,
-      value: r.value,
-      priority: r.priority,
-      valid: r.status === "verified",
-    }));
+    const formattedRecords = formatRecords(domainRecords);
 
-    // Upsert domain in Supabase
+    // Upsert domain in Supabase, persisting the Resend domain ID and DNS records
     const { data: domainRow, error: upsertError } = await supabase
       .from("domains")
       .upsert(
@@ -167,7 +159,9 @@ Deno.serve(async (req: Request) => {
           user_id: user.id,
           domain_name,
           status: "pending",
-          mailgun_domain: resendDomainId, // reusing column to store Resend domain ID
+          mailgun_domain: resendDomainId,
+          resend_domain_id: resendDomainId,
+          dns_records: formattedRecords,
         },
         { onConflict: "user_id,domain_name" }
       )
